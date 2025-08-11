@@ -14,10 +14,6 @@
 #endif
 
 static THREAD_LOCAL MDB_txn* m_txn = NULL;
-static THREAD_LOCAL MDB_dbi m_blocks;
-static THREAD_LOCAL MDB_dbi m_txs_pruned;
-static THREAD_LOCAL MDB_dbi m_tx_indices;
-static THREAD_LOCAL MDB_dbi m_block_info;
 
 static THREAD_LOCAL MDB_cursor* m_cur_blocks;
 static THREAD_LOCAL MDB_cursor* m_cur_txs_pruned;
@@ -107,6 +103,7 @@ static int compare_hash32(const MDB_val* a, const MDB_val* b) {
 static bool open(bcsel_db* self) {
     int result;
     bcsel_lmdb* this = (bcsel_lmdb*)self;
+    MDB_txn* txn;
 
     if (result = mdb_env_create(&this->m_env))
         return lmdb_fail("Failed to create lmdb environment", result);
@@ -114,6 +111,25 @@ static bool open(bcsel_db* self) {
         return lmdb_fail("Failed to set max number of dbs", result);
     if (result = mdb_env_open(this->m_env, this->path, MDB_RDONLY, 0644))
         return lmdb_fail("Failed to open lmdb environment", result);
+
+    if (result = mdb_txn_begin(this->m_env, NULL, MDB_RDONLY, &txn))
+        return lmdb_fail("Failed to create a transaction for the db", result);
+    if (result = mdb_dbi_open(txn, LMDB_BLOCKS, MDB_INTEGERKEY, &this->m_blocks))
+        return lmdb_fail("Failed to open db handle for " LMDB_BLOCKS, result);
+    if (result = mdb_dbi_open(txn, LMDB_TXS_PRUNED, MDB_INTEGERKEY, &this->m_txs_pruned))
+        return lmdb_fail("Failed to open db handle for " LMDB_TXS_PRUNED, result);
+    if (result = mdb_dbi_open(txn, LMDB_TX_INDICES, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED, &this->m_tx_indices))
+        return lmdb_fail("Failed to open db handle for " LMDB_TX_INDICES, result);
+    if (result = mdb_dbi_open(txn, LMDB_BLOCK_INFO, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED, &this->m_block_info))
+        return lmdb_fail("Failed to open db handle for " LMDB_BLOCK_INFO, result);
+
+    if (result = mdb_set_dupsort(txn, this->m_tx_indices, &compare_hash32))
+        return lmdb_fail("Failed to set dupsort on " LMDB_TX_INDICES, result);
+    if (result = mdb_set_dupsort(txn, this->m_block_info, &compare_uint64))
+        return lmdb_fail("Failed to set dupsort on " LMDB_BLOCK_INFO, result);
+
+    if (result = mdb_txn_commit(txn))
+        return lmdb_fail("Failed to commit tx", result);
 
     this->is_open = true;
 
@@ -127,24 +143,10 @@ static bool ensure_tx(const bcsel_lmdb* this) {
     int result;
     if (result = mdb_txn_begin(this->m_env, NULL, MDB_RDONLY, &m_txn))
         return lmdb_fail("Failed to create a transaction for the db", result);
-    if (result = mdb_dbi_open(m_txn, LMDB_BLOCKS, MDB_INTEGERKEY, &m_blocks))
-        return lmdb_fail("Failed to open db handle for " LMDB_BLOCKS, result);
-    if (result = mdb_dbi_open(m_txn, LMDB_TXS_PRUNED, MDB_INTEGERKEY, &m_txs_pruned))
-        return lmdb_fail("Failed to open db handle for " LMDB_TXS_PRUNED, result);
-    if (result = mdb_dbi_open(m_txn, LMDB_TX_INDICES, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED, &m_tx_indices))
-        return lmdb_fail("Failed to open db handle for " LMDB_TX_INDICES, result);
-    if (result = mdb_dbi_open(m_txn, LMDB_BLOCK_INFO, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED, &m_block_info))
-        return lmdb_fail("Failed to open db handle for " LMDB_BLOCK_INFO, result);
-
-    if (result = mdb_set_dupsort(m_txn, m_tx_indices, &compare_hash32))
-        return lmdb_fail("Failed to set dupsort on " LMDB_TX_INDICES, result);
-    if (result = mdb_set_dupsort(m_txn, m_block_info, &compare_uint64))
-        return lmdb_fail("Failed to set dupsort on " LMDB_BLOCK_INFO, result);
-
-    if (result = mdb_cursor_open(m_txn, m_blocks, &m_cur_blocks)) {
+    if (result = mdb_cursor_open(m_txn, this->m_blocks, &m_cur_blocks)) {
         return lmdb_fail("Failed to open cursor for " LMDB_BLOCKS, result);
     }
-    if (result = mdb_cursor_open(m_txn, m_txs_pruned, &m_cur_txs_pruned)) {
+    if (result = mdb_cursor_open(m_txn, this->m_txs_pruned, &m_cur_txs_pruned)) {
         return lmdb_fail("Failed to open cursor for " LMDB_TXS_PRUNED, result);
     }
 
@@ -160,7 +162,7 @@ static bool get_blockhash(bcsel_db* self, uint64_t blockid, bcsel_hash* hash) {
         return false;
     }
     MDB_cursor* cur;
-    int result = mdb_cursor_open(m_txn, m_block_info, &cur);
+    int result = mdb_cursor_open(m_txn, this->m_block_info, &cur);
     if (result) {
         return lmdb_fail("Failed to open cursor", result);
     }
@@ -329,7 +331,7 @@ static bool get_last_txid(bcsel_db* self, uint64_t blockid, uint64_t* txid) {
     calc_miner_tx_hash(&block, &tx_hash);
     //get the tx index
     MDB_cursor* cur;
-    result = mdb_cursor_open(m_txn, m_tx_indices, &cur);
+    result = mdb_cursor_open(m_txn, this->m_tx_indices, &cur);
     if (result) {
         return lmdb_fail("Failed to open cursor for " LMDB_TX_INDICES, result);
     }
