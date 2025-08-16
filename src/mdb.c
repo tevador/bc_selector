@@ -10598,6 +10598,19 @@ mdb_env_get_fd(MDB_env *env, mdb_filehandle_t *arg)
 	return MDB_SUCCESS;
 }
 
+int ESECT
+mdb_env_set_pagesize(MDB_env* env, int size)
+{
+    if (!env || env->me_map)
+        return EINVAL;
+    if (size > MAX_PAGESIZE || size < 256)
+        return EINVAL;
+    if (size & (size - 1))
+        return EINVAL;
+    env->me_os_psize = size;
+    return MDB_SUCCESS;
+}
+
 /** Common code for #mdb_stat() and #mdb_env_stat().
  * @param[in] env the environment to operate in.
  * @param[in] db the #MDB_db record containing the stats to return.

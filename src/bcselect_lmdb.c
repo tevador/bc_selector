@@ -109,6 +109,8 @@ static bool open(bcsel_db* self) {
         return lmdb_fail("Failed to create lmdb environment", result);
     if (result = mdb_env_set_maxdbs(this->m_env, 32))
         return lmdb_fail("Failed to set max number of dbs", result);
+    if (result = mdb_env_set_pagesize(this->m_env, 0x4000)) //16K page size
+        return lmdb_fail("Failed to set page size", result);
     if (result = mdb_env_open(this->m_env, this->path, MDB_RDONLY, 0644))
         return lmdb_fail("Failed to open lmdb environment", result);
 
